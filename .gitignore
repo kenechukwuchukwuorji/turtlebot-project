@@ -1,0 +1,30 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.tox/
+.venv/
+venv/
+env/
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+# Ignore environment variables (SENSITIVE)
+.env
+
+# Ignore dependencies
+node_modules/
+dist/
+
+# Ignore log files
+*.log
+
+build/
+install/
+log/
+
+src/.vscode/*
+.vscode/*

@@ -31,35 +31,40 @@ public:
     }
 
     void callbackOdomTimer(){
-        double cur_left_pos = wheels_current_pos_[0];
-        double cur_right_pos = wheels_current_pos_[1];
-        double init_left_pos = wheels_init_pos_[0];
-        double init_right_pos = wheels_init_pos_[1];
-        double delta_ql = cur_left_pos - init_left_pos;
-        double delta_qr = cur_right_pos - init_right_pos;
-        double delta_D = wheel_rad_*(delta_qr + delta_ql)/2;
-        double delta_theta = wheel_rad_*(delta_qr - delta_ql)/track_width_;
-        x_ = x_ + delta_D*cos(theta_ + delta_theta/2);
-        y_ = y_ + delta_D*sin(theta_ + delta_theta/2);
-        theta_ = theta_ + delta_theta;
+
+        if (!wheels_current_pos_.empty() & !wheels_init_pos_.empty()){
+            double cur_left_pos = wheels_current_pos_.at(0);
+            double cur_right_pos = wheels_current_pos_.at(1);
+            double init_left_pos = wheels_init_pos_.at(0);
+            double init_right_pos = wheels_init_pos_.at(1);          
+            
         
-        // udpate the initial pose
-        update_init_pose_ = true;
-        auto msg = nav_msgs::msg::Odometry();
+            double delta_ql = cur_left_pos - init_left_pos;
+            double delta_qr = cur_right_pos - init_right_pos;
+            double delta_D = wheel_rad_*(delta_qr + delta_ql)/2;
+            double delta_theta = wheel_rad_*(delta_qr - delta_ql)/track_width_;
+            x_ = x_ + delta_D*cos(theta_ + delta_theta/2);
+            y_ = y_ + delta_D*sin(theta_ + delta_theta/2);
+            theta_ = theta_ + delta_theta;
+            
+            // udpate the initial pose
+            update_init_pose_ = true;
+            auto msg = nav_msgs::msg::Odometry();
 
-        //convert theta to a quaternion
-        tf2::Quaternion tf2_quat;
-        tf2_quat.setRPY(0, 0, theta_);
-        tf2_quat.normalize();
-        geometry_msgs::msg::Quaternion msg_quat = tf2::toMsg(tf2_quat);
+            //convert theta to a quaternion
+            tf2::Quaternion tf2_quat;
+            tf2_quat.setRPY(0, 0, theta_);
+            tf2_quat.normalize();
+            geometry_msgs::msg::Quaternion msg_quat = tf2::toMsg(tf2_quat);
 
-        msg.header.frame_id = "turtlebot_odom";
-        msg.header.stamp = this->get_clock()->now();
-        msg.pose.pose.position.x = x_;
-        msg.pose.pose.position.y = y_;
-        msg.pose.pose.orientation = msg_quat;
+            msg.header.frame_id = "turtlebot_odom";
+            msg.header.stamp = this->get_clock()->now();
+            msg.pose.pose.position.x = x_;
+            msg.pose.pose.position.y = y_;
+            msg.pose.pose.orientation = msg_quat;
 
-        odom_publisher_->publish(msg);
+            odom_publisher_->publish(msg);
+        }
 
     }
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
+from visualization_msgs.msg import Marker, MarkerArray
 import math
 
 #this is my node template
@@ -10,13 +12,16 @@ class ObstacleDetector(Node):
 
 
     def __init__(self):
-
+        super().__init__("obstacle_detector")
         self.obstacle_distance_threshold = 1.5 #Distance for points to be considered as obstacles
         self.cluster_distance_threshold = 0.2 #max. distance between points to be considered as part of the same cluster(obstacle)
         self.min_cluster_size = 3 #minimum number of points for a cluster to be considered as an obstacle
-        super().__init__("obstacle_detector")
+        
         self.scan_sub = self.create_subscription(LaserScan, "/scan", 
                                                      self.scan_callback, 10)
+      
+        self.pub_markers = self.create_publisher(MarkerArray, "/obstacle_markers", 10)
+
         
     def scan_callback(self, msg:LaserScan):
 
@@ -66,7 +71,35 @@ class ObstacleDetector(Node):
 
         return clusters
 
- 
+    def publish_markers(self, obstacle_positions, header):
+    
+        marker = MarkerArray()
+        for i, (centroid_x, centroid_y) in enumerate(obstacle_positions): 
+            marker.header = header
+            marker.header.frame_id = "base_link"
+            marker.ns = "obstacles"
+            marker.id = i
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            marker.pose.position.x = centroid_x
+            marker.pose.position.y = centroid_y
+            marker.pose.position.z = 0.1
+            marker.scale.x = 0.2
+            marker.scale.y = 0.2
+            marker.scale.z = 0.2
+            marker.color.r = 1.0  
+            marker.color.a = 0.8
+
+            marker.markers.append(marker)
+        for j in range(len(obstacle_positions), 20):
+            clear = Marker()
+            clear.header = header
+            clear.ns = 'obstacles'
+            clear.id = j
+            clear.action = Marker.DELETE
+            marker.markers.append(clear)
+
+        self.pub_markers.publish(obstacle_positions)
 
 
 def main(args=None):

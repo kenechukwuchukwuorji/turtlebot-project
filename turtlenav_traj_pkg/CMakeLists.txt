@@ -50,7 +50,11 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(PROGRAMS script/dubins_path.py
+install(PROGRAMS 
+
+  script/dubins_path.py
+  script/map_search.py
+
   DESTINATION lib/${PROJECT_NAME}
 
 )

@@ -78,8 +78,8 @@ private:
     double y_ = 0;
     double theta_ = 0;
     bool update_init_pose_ = true;
-    double wheel_rad_ = 0.1; // in meters
-    double track_width_ = 0.4; // in meters
+    double wheel_rad_ = 0.066/2; // in meters
+    double track_width_ = 0.287; // in meters
 };
 
 int main(int argc, char **argv)

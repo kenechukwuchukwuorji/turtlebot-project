@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp" 
 #include "nav_msgs/msg/occupancy_grid.hpp"
@@ -35,6 +36,19 @@ namespace turtle_nav
     public:
         MyNode(rclcpp::NodeOptions options) : Node("turtle_nav_node", options)
         {
+            // 1. Setup the abstraction parameter
+            this->declare_parameter<bool>("use_stamped_cmd_vel", false);
+            use_stamped_cmd_vel_ = this->get_parameter("use_stamped_cmd_vel").as_bool();
+
+            if (use_stamped_cmd_vel_) {
+                RCLCPP_INFO(this->get_logger(), "Publishing TwistStamped (Simulation Mode)");
+                cmd_vel_stamped_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 10);
+            } else {
+                RCLCPP_INFO(this->get_logger(), "Publishing Twist (Physical Robot Mode)");
+                cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
+            }
+
+            // 2. Initialize Subscribers
             pose_subscription = create_subscription<nav_msgs::msg::Odometry>(
                 "odom", 10, [this](nav_msgs::msg::Odometry::SharedPtr msg) {
                     input_msg = *msg;
@@ -56,16 +70,16 @@ namespace turtle_nav
                     execute_astar_planning();
                 });
 
-            velocity_publisher = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
+            // 3. Initialize RViz Publishers
             path_publisher = create_publisher<nav_msgs::msg::Path>("/astar/nav_path", 10);
-            
             auto map_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local();
             map_publisher = create_publisher<nav_msgs::msg::OccupancyGrid>("/map", map_qos);
 
-            // Publish loops (Map reduced to 500ms to save CPU cycles)
+            // 4. Timers
             publish_timer = create_wall_timer(100ms, [this]() { callback_control_loop(); });
             map_publish_timer = create_wall_timer(500ms, [this]() { publish_map_and_replan(); });                                  
             
+            // 5. Default Variable Setup
             map_width = 80;                     
             map_height = 80;                    
             map_resolution = 0.05;              
@@ -90,7 +104,8 @@ namespace turtle_nav
         rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscription;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_subscription;
         
-        rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_publisher;
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+        rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_stamped_pub_;
         rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_publisher;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher;
 
@@ -108,7 +123,7 @@ namespace turtle_nav
         
         int map_width, map_height;
         double map_resolution, obstacle_distance_threshold;
-        bool has_odom, has_scan, has_goal, has_path;
+        bool has_odom, has_scan, has_goal, has_path, use_stamped_cmd_vel_;
 
         GridPoint worldToGrid(double wx, double wy) {
             GridPoint pt;
@@ -120,6 +135,23 @@ namespace turtle_nav
         void gridToWorld(int gx, int gy, double& wx, double& wy) {
             wx = map_msg.info.origin.position.x + (gx + 0.5) * map_resolution;
             wy = map_msg.info.origin.position.y + (gy + 0.5) * map_resolution;
+        }
+
+        // Helper function to handle the dynamic velocity publishing
+        void publish_velocity(double linear_x, double angular_z) {
+            if (use_stamped_cmd_vel_) {
+                geometry_msgs::msg::TwistStamped msg;
+                msg.header.stamp = this->get_clock()->now();
+                msg.header.frame_id = "base_link";
+                msg.twist.linear.x = linear_x;
+                msg.twist.angular.z = angular_z;
+                cmd_vel_stamped_pub_->publish(msg);
+            } else {
+                geometry_msgs::msg::Twist msg;
+                msg.linear.x = linear_x;
+                msg.angular.z = angular_z;
+                cmd_vel_pub_->publish(msg);
+            }
         }
 
         void publish_map_and_replan()
@@ -142,14 +174,13 @@ namespace turtle_nav
             double curr_x = input_msg.pose.pose.position.x;
             double curr_y = input_msg.pose.pose.position.y;
             
-            // Standard Euler Conversion for Map Projection
             double q_x = input_msg.pose.pose.orientation.x;
             double q_y = input_msg.pose.pose.orientation.y;
             double q_z = input_msg.pose.pose.orientation.z;
             double q_w = input_msg.pose.pose.orientation.w;
             double curr_yaw = std::atan2(2.0 * (q_w * q_z + q_x * q_y), 1.0 - 2.0 * (q_y * q_y + q_z * q_z));
 
-            int inflation_radius = 3; // 15cm obstacle inflation buffer
+            int inflation_radius = 5; 
 
             for (size_t i = 0; i < input_scan.ranges.size(); ++i) {
                 double range_val = input_scan.ranges[i];
@@ -163,7 +194,6 @@ namespace turtle_nav
 
                 GridPoint gp = worldToGrid(x_global, y_global);
                 if (gp.x >= 0 && gp.x < map_width && gp.y >= 0 && gp.y < map_height) {
-                    // Paint inflated circular buffer around obstacles
                     for (int dx = -inflation_radius; dx <= inflation_radius; ++dx) {
                         for (int dy = -inflation_radius; dy <= inflation_radius; ++dy) {
                             if (std::hypot(dx, dy) <= inflation_radius) {
@@ -178,9 +208,8 @@ namespace turtle_nav
                 }
             }
 
-            // Force clear a larger footprint directly under the robot center
             GridPoint robot_center = worldToGrid(curr_x, curr_y);
-            int clear_radius = 3; 
+            int clear_radius = 5; 
             for (int cx = -clear_radius; cx <= clear_radius; ++cx) {
                 for (int cy = -clear_radius; cy <= clear_radius; ++cy) {
                     int nx = robot_center.x + cx; 
@@ -212,7 +241,6 @@ namespace turtle_nav
 
             if (start == goal) return;
 
-            // Stack-allocated optimization (No more memory leaks)
             auto comp = [](const AStarNode& a, const AStarNode& b) { return a.f > b.f; };
             std::priority_queue<AStarNode, std::vector<AStarNode>, decltype(comp)> open_list(comp);
             std::map<GridPoint, double> closed_g;
@@ -233,8 +261,6 @@ namespace turtle_nav
                 open_list.pop();
 
                 if (current.pt == goal) { found = true; break; }
-                
-                // Tightened iteration break to prevent node starvation
                 if (++iterations > 800) break; 
 
                 closed_g[current.pt] = current.g;
@@ -277,8 +303,8 @@ namespace turtle_nav
                 std::reverse(calculated_path.poses.begin(), calculated_path.poses.end());
                 path_publisher->publish(calculated_path);
                 
-                current_waypoint_idx = std::min(calculated_path.poses.size() - 1, static_cast<size_t>(2)); // Tighter tracking
-                last_path_update_time_ = this->get_clock()->now(); // Reset watchdog
+                current_waypoint_idx = std::min(calculated_path.poses.size() - 1, static_cast<size_t>(2)); 
+                last_path_update_time_ = this->get_clock()->now(); 
                 has_path = true;
             } else {
                 has_path = false;
@@ -287,30 +313,23 @@ namespace turtle_nav
 
         void callback_control_loop()
         {
-            geometry_msgs::msg::TwistStamped vel_msg;
-            vel_msg.header.stamp = this->get_clock()->now();
-            vel_msg.header.frame_id = "base_link";
-
             // SAFETY WATCHDOG: Kill motors if A* thread has frozen for over 1.0 seconds
             if (has_path) {
                 auto time_since_update = (this->get_clock()->now() - last_path_update_time_).seconds();
                 if (time_since_update > 1.0) {
-                    vel_msg.twist.linear.x = 0.0; vel_msg.twist.angular.z = 0.0;
-                    velocity_publisher->publish(vel_msg);
+                    publish_velocity(0.0, 0.0);
                     return;
                 }
             }
 
             if (!has_path || calculated_path.poses.empty()) {
-                vel_msg.twist.linear.x = 0.0; vel_msg.twist.angular.z = 0.0;
-                velocity_publisher->publish(vel_msg);
+                publish_velocity(0.0, 0.0);
                 return;
             }
 
             double curr_x = input_msg.pose.pose.position.x;
             double curr_y = input_msg.pose.pose.position.y;
             
-            // Standard Euler Conversion for pure pursuit controller
             double q_x = input_msg.pose.pose.orientation.x;
             double q_y = input_msg.pose.pose.orientation.y;
             double q_z = input_msg.pose.pose.orientation.z;
@@ -320,7 +339,7 @@ namespace turtle_nav
             double final_dist_to_goal = std::hypot(global_goal_x - curr_x, global_goal_y - curr_y);
 
             if (final_dist_to_goal < 0.15) {
-                vel_msg.twist.linear.x = 0.0; vel_msg.twist.angular.z = 0.0;
+                publish_velocity(0.0, 0.0);
                 has_goal = false; has_path = false;
                 RCLCPP_INFO(this->get_logger(), "Goal reached successfully! Stopping motors.");
             } 
@@ -333,15 +352,15 @@ namespace turtle_nav
                 double angle_error = std::atan2(std::sin(angle_to_goal - curr_yaw), std::cos(angle_to_goal - curr_yaw));
 
                 double raw_angular_velocity = Kp_ang * angle_error;
-                vel_msg.twist.angular.z = std::clamp(raw_angular_velocity, -1.0, 1.0);
+                double out_angular = std::clamp(raw_angular_velocity, -1.0, 1.0);
+                double out_linear = 0.0;
 
-                if (std::abs(angle_error) > 0.78) {
-                    vel_msg.twist.linear.x = 0.0; 
-                } else {
-                    vel_msg.twist.linear.x = std::min(0.14, Kp_lin * waypoint_dist); 
+                if (std::abs(angle_error) <= 0.78) {
+                    out_linear = std::min(0.14, Kp_lin * waypoint_dist); 
                 }
+                
+                publish_velocity(out_linear, out_angular);
             }
-            velocity_publisher->publish(vel_msg);
         }
     };
 }

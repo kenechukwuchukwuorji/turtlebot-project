@@ -239,8 +239,8 @@ private:
   bool use_stamped_cmd_vel_ = true;
   bool enable_visual_servo_ = true;
   double min_area_ = 300.0;
-  double stop_area_ = 6000.0;
-  double approach_speed_ = 0.08;
+  double stop_area_ = 1000000.0; // change to approx of the cap (6000 or lower)
+  double approach_speed_ = 0.5;
   double angular_gain_ = 0.002;
   bool nav_cmd_received_ = false;
   geometry_msgs::msg::Twist last_nav_cmd_;

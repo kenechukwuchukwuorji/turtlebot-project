@@ -38,6 +38,12 @@ install(
 )
 
 
+install(
+  DIRECTORY launch config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+
 install(TARGETS
   turtle_nav
   a_star_lite

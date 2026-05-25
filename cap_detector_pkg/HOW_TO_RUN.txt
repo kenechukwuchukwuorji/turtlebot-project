@@ -1,0 +1,183 @@
+CAP DETECTOR PACKAGE - TASK 4
+=============================
+
+This package detects green plastic caps with the robot camera.
+
+It can be used in two modes:
+- detection only: publishes /cap_detected
+- supervisor mode: follows the Task1 navigation command when no cap is visible, and takes control only when a cap is detected
+
+
+1. Put the package in the ROS workspace
+--------------------------------------
+
+Expected structure:
+
+~/sofar_ws/src/cap_detector_pkg
+
+
+2. Install dependencies on the school computer / robot computer
+---------------------------------------------------------------
+
+For ROS 2 Galactic:
+
+sudo apt install ros-galactic-cv-bridge ros-galactic-vision-opencv libopencv-dev
+
+
+3. Build
+--------
+
+cd ~/sofar_ws
+source /opt/ros/galactic/setup.bash
+colcon build --packages-select cap_detector_pkg
+source install/setup.bash
+
+
+4. Check the camera topic
+-------------------------
+
+Before launching the detector, check the exact camera topic:
+
+ros2 topic list -t | grep image
+
+Common possible topics:
+
+/camera/image_raw
+/waffle2/camera/image_raw
+
+Use the topic that exists on your robot.
+
+
+5. Run on the real TurtleBot - Galactic
+---------------------------------------
+
+The real TurtleBot usually uses geometry_msgs/msg/Twist on cmd_vel.
+Therefore use:
+
+use_stamped_cmd_vel:=false
+
+Example for waffle2:
+
+ros2 run cap_detector_pkg task4_caps --ros-args \
+  -p use_stamped_cmd_vel:=false \
+  -p image_topic:=/waffle2/camera/image_raw \
+  -p input_cmd_vel_topic:=/cmd_vel_nav \
+  -p output_cmd_vel_topic:=/waffle2/cmd_vel
+
+If the camera topic is different, replace /waffle2/camera/image_raw.
+
+
+6. Run in simulation - Jazzy / Gazebo
+-------------------------------------
+
+Gazebo with ROS 2 Jazzy usually uses geometry_msgs/msg/TwistStamped.
+Therefore use:
+
+use_stamped_cmd_vel:=true
+
+Example:
+
+ros2 run cap_detector_pkg task4_caps --ros-args \
+  -p use_stamped_cmd_vel:=true \
+  -p image_topic:=/camera/image_raw \
+  -p input_cmd_vel_topic:=/cmd_vel_nav \
+  -p output_cmd_vel_topic:=/cmd_vel
+
+
+7. Detection-only mode
+----------------------
+
+To test only the cap detection without moving the robot:
+
+ros2 run cap_detector_pkg task4_caps --ros-args \
+  -p use_stamped_cmd_vel:=false \
+  -p image_topic:=/waffle2/camera/image_raw \
+  -p enable_visual_servo:=false
+
+Then check:
+
+ros2 topic echo /cap_detected
+
+If the detector sees a green cap, it publishes:
+
+data: true
+
+Otherwise:
+
+data: false
+
+
+8. Useful visualization
+-----------------------
+
+To see the camera image:
+
+ros2 run rqt_image_view rqt_image_view
+
+Then select the camera topic in the dropdown.
+
+
+9. Important parameters
+-----------------------
+
+image_topic:
+  Camera image topic.
+
+input_cmd_vel_topic:
+  Navigation command input. The navigation node should publish here.
+  Default: /cmd_vel_nav
+
+output_cmd_vel_topic:
+  Final command sent to the robot.
+  On the robot, this is usually /waffle2/cmd_vel.
+
+use_stamped_cmd_vel:
+  true  = use geometry_msgs/msg/TwistStamped, useful in Jazzy/Gazebo
+  false = use geometry_msgs/msg/Twist, useful on the real Galactic TurtleBot
+
+enable_visual_servo:
+  true  = the node can drive toward the cap
+  false = detection only, no motion command override
+
+min_area:
+  Minimum green blob area to accept as a cap.
+
+stop_area:
+  If the cap appears larger than this, the robot stops because it is close.
+
+
+10. How it should connect with the full project
+-----------------------------------------------
+
+Recommended architecture:
+
+Navigation node:
+  publishes to /cmd_vel_nav
+
+Task 4 cap detector:
+  subscribes to /cmd_vel_nav
+  subscribes to camera image
+  publishes final command to robot cmd_vel
+
+So the flow is:
+
+navigation -> /cmd_vel_nav -> task4_caps -> robot /cmd_vel
+
+If no cap is detected, task4_caps forwards the navigation command from Task1.
+If a green cap is detected, task4_caps overrides the navigation command and moves toward the cap.
+If Task1 is not publishing any navigation command and no cap is visible, task4_caps publishes zero velocity.
+
+This means Task4 does not make the robot go in a straight line by itself.
+The normal trajectory must come from Task1 or the team navigation node.
+
+
+11. Notes
+---------
+
+This package does not require modifying the other team packages.
+
+If the other navigation package publishes directly to /cmd_vel, it can be remapped at launch time to /cmd_vel_nav.
+
+Example:
+
+ros2 run their_navigation_package their_node --ros-args -r /cmd_vel:=/cmd_vel_nav

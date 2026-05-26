@@ -1,7 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
-#include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp" 
@@ -11,7 +10,6 @@
 #include <cmath>
 #include <vector>
 #include <queue>
-#include <deque> // Perfect for a First-In-First-Out (FIFO) queue
 #include <map>
 #include <memory>
 #include <iostream>
@@ -50,15 +48,15 @@ namespace turtle_nav
                 cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
             }
 
-            // 2. Initialize Subscribers
+            // 2. Initialize Subscribers (UPDATED WITH SENSORDATAQOS FOR PHYSICAL BOT)
             pose_subscription = create_subscription<nav_msgs::msg::Odometry>(
-                "odom", 10, [this](nav_msgs::msg::Odometry::SharedPtr msg) {
+                "waffle2/odom", 10, [this](nav_msgs::msg::Odometry::SharedPtr msg) {
                     input_msg = *msg;
                     has_odom = true;
                 });
 
             scan_subscription = create_subscription<sensor_msgs::msg::LaserScan>(
-                "scan", 10, [this](sensor_msgs::msg::LaserScan::SharedPtr msg) {
+                "/waffle2/scan", 10, [this](sensor_msgs::msg::LaserScan::SharedPtr msg) {
                     input_scan = *msg;
                     has_scan = true;
                 });
@@ -71,8 +69,6 @@ namespace turtle_nav
                     RCLCPP_INFO(this->get_logger(), "Goal locked in at world coordinates: X: %.2f, Y: %.2f", global_goal_x, global_goal_y);
                     execute_astar_planning();
                 });
-
-            waypoint_sub_ = create_subscription<geometry_msgs::msg::PoseArray>("/map_grid",10, std::bind(&MyNode::waypointCallback, this, std::placeholders::_1));   
 
             // 3. Initialize RViz Publishers
             path_publisher = create_publisher<nav_msgs::msg::Path>("/astar/nav_path", 10);
@@ -107,7 +103,6 @@ namespace turtle_nav
         rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pose_subscription;
         rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscription;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_subscription;
-        rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr waypoint_sub_;
         
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
         rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_stamped_pub_;
@@ -129,9 +124,6 @@ namespace turtle_nav
         int map_width, map_height;
         double map_resolution, obstacle_distance_threshold;
         bool has_odom, has_scan, has_goal, has_path, use_stamped_cmd_vel_;
-        bool mission_complete_ = false;
-
-        std::deque<std::pair<double, double>> waypoint_queue_;
 
         GridPoint worldToGrid(double wx, double wy) {
             GridPoint pt;
@@ -160,40 +152,6 @@ namespace turtle_nav
                 msg.angular.z = angular_z;
                 cmd_vel_pub_->publish(msg);
             }
-        }
-
-        void waypointCallback(const geometry_msgs::msg::PoseArray::SharedPtr msg)
-        {
-        waypoint_queue_.clear(); // Clear any old missions
-
-        for (const auto& pose : msg->poses) {
-            waypoint_queue_.push_back({pose.position.x, pose.position.y});
-        }
-
-        RCLCPP_INFO(this->get_logger(), "Received %zu waypoints!", waypoint_queue_.size());
-        mission_complete_ = false;
-        
-        // Instantly load the very first waypoint
-        loadNextWaypoint();
-        }
-
-        void loadNextWaypoint()
-        {
-        if (waypoint_queue_.empty()) {
-            RCLCPP_INFO(this->get_logger(), "All waypoints reached. Mission Complete!");
-            mission_complete_ = true;
-            return;
-        }
-
-        // Grab the front waypoint and remove it from the list
-        auto next_target = waypoint_queue_.front();
-        waypoint_queue_.pop_front();
-
-        // Overwrite your existing A* global goal variables
-        global_goal_x = next_target.first;
-        global_goal_y = next_target.second;
-
-        RCLCPP_INFO(this->get_logger(), "Heading to new waypoint: [%.2f, %.2f]", global_goal_x, global_goal_y);
         }
 
         void publish_map_and_replan()
@@ -273,6 +231,12 @@ namespace turtle_nav
         {
             if (!has_odom) return;
 
+            // Protection layout check against map initialization delays
+            if (map_msg.data.empty() || map_msg.data.size() < static_cast<size_t>(map_width * map_height)) {
+                RCLCPP_WARN(this->get_logger(), "A* Planning aborted: Map memory allocation is not ready yet.");
+                return;
+            }
+
             GridPoint start = worldToGrid(input_msg.pose.pose.position.x, input_msg.pose.pose.position.y);
             GridPoint goal = worldToGrid(global_goal_x, global_goal_y);
 
@@ -344,8 +308,14 @@ namespace turtle_nav
                 }
                 std::reverse(calculated_path.poses.begin(), calculated_path.poses.end());
                 path_publisher->publish(calculated_path);
-                
-                current_waypoint_idx = std::min(calculated_path.poses.size() - 1, static_cast<size_t>(2)); 
+
+                // Safe array lookahead boundary clamp
+                if (calculated_path.poses.size() > 2) {
+                    current_waypoint_idx = 2;
+                } else {
+                    current_waypoint_idx = calculated_path.poses.size() - 1;
+                }
+
                 last_path_update_time_ = this->get_clock()->now(); 
                 has_path = true;
             } else {
@@ -355,10 +325,10 @@ namespace turtle_nav
 
         void callback_control_loop()
         {
-            // SAFETY WATCHDOG: Kill motors if A* thread has frozen for over 1.0 seconds
+            // SAFETY WATCHDOG: Kill motors if A* thread has frozen for over 4.0 seconds
             if (has_path) {
                 auto time_since_update = (this->get_clock()->now() - last_path_update_time_).seconds();
-                if (time_since_update > 1.0) {
+                if (time_since_update > 4.0) {
                     publish_velocity(0.0, 0.0);
                     return;
                 }
@@ -381,24 +351,12 @@ namespace turtle_nav
             double final_dist_to_goal = std::hypot(global_goal_x - curr_x, global_goal_y - curr_y);
 
             if (final_dist_to_goal < 0.15) {
-                RCLCPP_INFO(this->get_logger(), "Waypoint reached at [%.2f, %.2f]!", global_goal_x, global_goal_y);
-                
-                // 1. Check if we have more waypoints waiting in the line
-                if (!waypoint_queue_.empty()) {
-                    loadNextWaypoint(); 
-                    // Force A* to calculate a brand new route from here to the new waypoint
-                    has_path = false; 
-                } else {
-                    // 2. The queue is completely empty. The mission is truly over.
-                    publish_velocity(0.0, 0.0);
-                    has_goal = false; 
-                    has_path = false;
-                    mission_complete_ = true;
-                    
-                    RCLCPP_INFO(this->get_logger(), "Final goal reached successfully! Mission Complete. Stopping motors.");
-                }
+                RCLCPP_INFO(this->get_logger(), "Goal reached at [%.2f, %.2f]! Stopping motors.", global_goal_x, global_goal_y);
+                publish_velocity(0.0, 0.0);
+                has_goal = false; 
+                has_path = false;
             }
-                        else {
+            else {
                 double look_ahead_x = calculated_path.poses[current_waypoint_idx].pose.position.x;
                 double look_ahead_y = calculated_path.poses[current_waypoint_idx].pose.position.y;
                 double waypoint_dist = std::hypot(look_ahead_x - curr_x, look_ahead_y - curr_y);

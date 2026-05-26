@@ -61,7 +61,7 @@ namespace turtle_nav
                     has_scan = true;
                 });
 
-            goal_subscription = create_subscription<geometry_msgs::msg::PoseStamped>(
+           /* goal_subscription = create_subscription<geometry_msgs::msg::PoseStamped>(
                 "/goal_pose", 10, [this](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
                     global_goal_x = msg->pose.position.x;
                     global_goal_y = msg->pose.position.y;
@@ -69,7 +69,7 @@ namespace turtle_nav
                     RCLCPP_INFO(this->get_logger(), "Goal locked in at world coordinates: X: %.2f, Y: %.2f", global_goal_x, global_goal_y);
                     execute_astar_planning();
                 });
-
+            */
             // 3. Initialize RViz Publishers
             path_publisher = create_publisher<nav_msgs::msg::Path>("/astar/nav_path", 10);
             auto map_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local();
